@@ -9,111 +9,113 @@ from freelancersdk.resources.projects.projects import search_projects
 from freelancersdk.resources.projects.exceptions import ProjectsNotFoundException
 from freelancersdk.resources.projects.helpers import create_search_projects_filter
 
-def get_projects():
-    load_dotenv()
-    # Здесь используется URL и OAuth-токен для сервиса Freelancer (а не FL.ru)
-    url = os.getenv('FLN_URL')
-    oauth_token = os.getenv("FLN_OAUTH_TOKEN")
-    session = Session(oauth_token=oauth_token, url=url)
 
-    query = ''
-    search_filter = create_search_projects_filter(
-        sort_field='time_updated',
-        or_search_query=False,
-    )
+class FreelancerParser:
+    URL = None
 
-    try:
-        p = search_projects(
-            session,
-            query=query,
-            search_filter=search_filter
+    def __init__(self, redis_client):
+        self.redis_client = redis_client
+
+        load_dotenv()
+        FreelancerParser.URL = os.getenv('FLN_URL')
+        if not FreelancerParser.URL:
+            raise ValueError("FLN_URL не задана в переменных окружения!")
+        self.oauth_token = os.getenv('FLN_OAUTH_TOKEN')
+        if not self.oauth_token:
+            raise ValueError("FLN_OAUTH_TOKEN не задана в переменных окружения!")
+
+        self.run()
+
+    def get_projects(self):
+        session = Session(oauth_token=self.oauth_token, url=self.URL)
+        query = ''
+        search_filter = create_search_projects_filter(
+            sort_field='time_updated',
+            or_search_query=False,
         )
-    except ProjectsNotFoundException as e:
-        print('Error message: {}'.format(e.message))
-        print('Server response: {}'.format(e.error_code))
-        return None
-    else:
-        return p
 
-def get_recent_projects(interval_seconds=330):
-    data = get_projects()
-    if data is None:
-        return []
-    recent_projects = []
-    now = time.time()
+        try:
+            p = search_projects(
+                session,
+                query=query,
+                search_filter=search_filter
+            )
+        except ProjectsNotFoundException as e:
+            print(f'Error message: {e.message}')
+            print(f'Server response: {e.error_code}')
+            return None
+        else:
+            return p
 
-    # В данных Freelancer время публикации хранится в поле "submitdate" как UNIX‑timestamp
-    projects = data.get('projects', [])
-    for project in projects:
-        project_time = project.get('submitdate', 0)
-        if now - project_time <= interval_seconds:
-            recent_projects.append(project)
-    return recent_projects
+    def get_recent_projects(self, interval_seconds=330):
+        data = self.get_projects()
+        if data is None:
+            return []
+        recent_projects = []
+        now = time.time()
 
-def publish_to_redis(message: dict, channel: str = "freelancer_projects"):
-    r = redis.Redis(host='localhost', port=6379, db=0)
-    r.publish(channel, json.dumps(message))
+        projects = data.get('projects', [])
+        for project in projects:
+            project_time = project.get('submitdate', 0)
+            if now - project_time <= interval_seconds:
+                recent_projects.append(project)
+        return recent_projects
 
-def process_projects():
-    # Подключаемся к Redis
-    r = redis.Redis(host='localhost', port=6379, db=0)
-    recent = get_recent_projects()
-    if recent:
-        print(f"\nНайдено {len(recent)} новых проектов за последние 5 минут:")
-        for project in recent:
-            project_id = project.get("id")
-            # Формируем ключ для проверки, например: "freelancer:39459678"
-            redis_key = f"freelancer:{project_id}"
-            if r.exists(redis_key):
-                # Если проект уже был обработан – пропускаем
-                continue
+    def publish_to_redis(self, message: dict, channel: str = 'freelancer_projects'):
+        self.redis_client.publish(channel, json.dumps(message))
 
-            # Выбираем основные данные:
-            title = project.get("title")
-            # Если полнотекстовое описание отсутствует, то используем preview_description
-            description = project.get("description") or project.get("preview_description")
-            # Формируем URL проекта.
-            # Если есть поле seo_url, то базовый URL будет "https://www.freelancer.com/" + seo_url
-            seo_url = project.get("seo_url")
-            if seo_url:
-                url = "https://www.freelancer.com/projects/" + seo_url
-            else:
-                url = project.get("url", "")  # резервный вариант
-            # Обрабатываем бюджет. В данных Freelancer бюджет – это объект с полями "minimum" и "maximum"
-            budget_obj = project.get("budget", {})
-            budget = {
-                "minimum": budget_obj.get("minimum"),
-                "maximum": budget_obj.get("maximum")
-            }
-            # Иногда полезно указать валютный знак из объекта "currency"
-            currency = project.get("currency")
-            if currency:
-                budget["currency"] = currency.get("sign")  # например, '$'
+    def freelancer_parser_run(self):
+        recent = self.get_recent_projects()
+        if recent:
+            print(f'\nНайдено {len(recent)} новых проектов за последние 5 минут:')
+            for project in recent:
+                project_id = project.get('id')
+                if not project_id:
+                    continue
 
-            # Формируем сообщение для публикации
-            message = {
-                "id": project_id,
-                "title": title,
-                "description": description,
-                "url": url,
-                "budget": budget
-            }
+                redis_key = f'freelancer:{project_id}'
+                if self.redis_client.exists(redis_key):
+                    continue
 
-            print(message)
+                title = project.get('title')
+                description = project.get('description') or project.get('preview_description')
+                seo_url = project.get('seo_url')
+                if seo_url:
+                    url = f'{self.URL}/projects/{seo_url}'
+                else:
+                    url = project.get('url', '')
 
-            # Публикуем сообщение в Redis на канал "freelancer_projects"
-            publish_to_redis(message, channel="freelancer_projects")
-            print(f"Опубликован проект {project_id}: {title}")
-            # Записываем ключ в Redis с TTL 6 минут (360 секунд), чтобы не публиковать повторно
-            r.set(redis_key, "1", ex=360)
-    else:
-        print("\nНовых проектов за последние 5 минут не найдено.")
+                budget_obj = project.get('budget', {})
+                budget = {
+                    'minimum': budget_obj.get('minimum'),
+                    'maximum': budget_obj.get('maximum')
+                }
+                currency = project.get('currency')
+                if currency:
+                    budget['currency'] = currency.get('sign')
+                else:
+                    budget['currency'] = None
 
-def main():
-    while True:
-        process_projects()
-        # Пауза 5 минут между проверками
-        time.sleep(300)
+                message = {
+                    'id': project_id,
+                    'title': title,
+                    'description': description,
+                    'url': url,
+                    'budget': budget
+                }
 
-if __name__ == '__main__':
-    main()
+                print(message)
+                self.publish_to_redis(message, channel='freelancer_projects')
+                print(f'Опубликован проект {project_id}: {title}')
+                self.redis_client.set(redis_key, '1', ex=360)
+        else:
+            print('\nНовых проектов за последние 5 минут не найдено.')
+
+    def run(self):
+        while True:
+            try:
+                self.freelancer_parser_run()
+            except Exception as e:
+                print('Ошибка запроса:', e)
+
+            time.sleep(300)

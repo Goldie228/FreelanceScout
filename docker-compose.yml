@@ -1,0 +1,23 @@
+services:
+  redis:
+    image: redis:7.0-alpine
+    container_name: redis_container
+    ports:
+      - "6379:6379"
+    restart: always
+
+  postgres:
+    image: postgres:14-alpine
+    container_name: postgres_container
+    environment:
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mypassword
+      POSTGRES_DB: mydb
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: always
+
+volumes:
+  pgdata:
