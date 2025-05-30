@@ -1,1 +1,16 @@
 .env
+*.env
+
+*.log
+logs/
+*.pid
+
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.envrc
+*.swp
+
+*.dockerignore
+docker-compose.override.yml
