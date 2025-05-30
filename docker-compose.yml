@@ -19,5 +19,15 @@ services:
       - pgdata:/var/lib/postgresql/data
     restart: always
 
+  bot:
+    build: .
+    container_name: freelance_scout_bot
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - postgres
+    restart: always
+
 volumes:
   pgdata:
