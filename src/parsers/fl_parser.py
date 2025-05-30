@@ -123,11 +123,11 @@ class FlParser:
         if not feed:
             print('RSS лента не получена.')
             return
+
         structured_data = self.get_structured_feed(feed)
         recent_data = self.filter_recent_items(structured_data, minutes=5)
         
         if recent_data and recent_data.get('items'):
-            print('Найдены новые элементы за последние 5 минут:')
             for item in recent_data['items']:
                 project_id = item.get('guid') or item.get('link')
                 if not project_id:
@@ -152,12 +152,8 @@ class FlParser:
                     'url': url,
                     'budget': budget
                 }
-                print(message)
                 self.publish_to_redis(message, channel='fl_projects')
-                print(f'Опубликовано сообщение для проекта {project_id}: {title}')
                 self.redis_client.set(redis_key, '1', ex=360)
-        else:
-            print('Новых элементов за последние 5 минут не найдено.')
 
     def run(self):
         while True:

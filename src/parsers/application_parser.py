@@ -1,55 +1,79 @@
-import time
-from multiprocessing import Process
-import redis
-
 from .fl_parser import FlParser
 from .kwork_parser import KworkParser
 from .freelancer_parser import FreelancerParser
 
+import time
+from multiprocessing import Process, Event
+import redis
+import signal
+import os
+import psutil
 
 class ApplicationParser:
     def __init__(self, redis_client):
         self.redis_client = redis_client
+        self.shutdown_event = Event()
+        self.processes = []
+        self._is_running = False
 
     def run_parsers(self):
-        processes = [
-            Process(target=self.run_fl_parser, args=(self.redis_client,), name="fl_parser"),
-            Process(target=self.run_kwork_parser, args=(self.redis_client,), name="kwork_parser"),
-            Process(target=self.run_freelancer_parser, args=(self.redis_client,), name="freelancer_parser")
-        ]
-
-        for proc in processes:
-            proc.start()
-            print(f"Запущен процесс: {proc.name} (PID: {proc.pid})")
-
+        if self._is_running:
+            return
+            
+        self._is_running = True
         try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            print("Получен сигнал завершения. Останавливаем процессы...")
-            for proc in processes:
-                proc.terminate()
-            for proc in processes:
+            # Создаем процессы
+            self.processes = [
+                Process(target=self._run_parser, args=(FlParser, self.redis_client)),
+                Process(target=self._run_parser, args=(KworkParser, self.redis_client)),
+                Process(target=self._run_parser, args=(FreelancerParser, self.redis_client))
+            ]
+            
+            # Запускаем процессы
+            for i, proc in enumerate(self.processes):
+                proc.start()
+                names = ["fl_parser", "kwork_parser", "freelancer_parser"]
+                print(f"Запущен процесс: {names[i]} (PID: {proc.pid})")
+            
+            # Ждем завершения
+            for proc in self.processes:
                 proc.join()
-            print("Все процессы завершены.")
+                
+        except Exception as e:
+            print(f"Ошибка в парсерах: {e}")
+        finally:
+            self._is_running = False
 
-    @staticmethod
-    def run_fl_parser(redis_client):
-        parser = FlParser(redis_client)
-        parser.run()
+    def _run_parser(self, parser_class, redis_client):
+        """Внутренний метод для запуска парсера"""
+        parser = parser_class(redis_client)
+        while not self.shutdown_event.is_set():
+            try:
+                parser.run()
+                time.sleep(1)
+            except Exception as e:
+                print(f"Ошибка в парсере: {e}")
 
-    @staticmethod
-    def run_kwork_parser(redis_client):
-        parser = KworkParser(redis_client)
-        parser.run()
-
-    @staticmethod
-    def run_freelancer_parser(redis_client):
-        parser = FreelancerParser(redis_client)
-        parser.run()
-
-
-if __name__ == "__main__":
-    redis_client = redis.Redis(host='localhost', port=6379, db=0)
-    app_parser = ApplicationParser(redis_client)
-    app_parser.run_parsers()
+    def kill_processes(self):
+        """Завершение всех процессов"""
+        print("Завершение процессов парсеров...")
+        self.shutdown_event.set()
+        
+        # Даем время на корректное завершение
+        time.sleep(1)
+        
+        # Принудительно завершаем оставшиеся процессы
+        for proc in self.processes:
+            if proc.is_alive():
+                proc.terminate()
+                proc.join(timeout=1)
+                
+                if proc.is_alive():
+                    print(f"Принудительное завершение процесса {proc.pid}")
+                    try:
+                        parent = psutil.Process(proc.pid)
+                        for child in parent.children(recursive=True):
+                            child.kill()
+                        parent.kill()
+                    except Exception as e:
+                        print(f"Ошибка при завершении: {e}")

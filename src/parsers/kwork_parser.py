@@ -110,11 +110,8 @@ class KworkParser:
         projects = self.extract_projects_from_json(html)
         
         if projects:
-            print(f"Найдено проектов на странице {page}: {len(projects)}")
-
-            recent_projects = self.filter_recent_projects(projects, minutes=500)
+            recent_projects = self.filter_recent_projects(projects, minutes=5)
             if recent_projects:
-                print(f"\nНайдено новых проектов за последние 5 минут: {len(recent_projects)}")
                 for proj in recent_projects:
                     project_id = proj.get("id")
                     if not project_id:
@@ -137,15 +134,9 @@ class KworkParser:
                         "url": f"{self.URL}/{project_id}",
                         "budget": budget
                     }
-                    
-                    print(message)
+
                     self.publish_to_redis(message, channel="kwork_projects")
-                    print(f"Опубликован проект {project_id}: {proj.get('name')}")
                     self.redis_client.set(redis_key, "1", ex=360)
-            else:
-                print("Новых проектов за последние 5 минут не найдено.")
-        else:
-            print("Проекты не найдены.")
 
     def run(self):
         while True:

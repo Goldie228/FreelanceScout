@@ -47,7 +47,7 @@ class FreelancerParser:
         else:
             return p
 
-    def get_recent_projects(self, interval_seconds=330):
+    def get_recent_projects(self, interval_seconds=360):
         data = self.get_projects()
         if data is None:
             return []
@@ -67,7 +67,6 @@ class FreelancerParser:
     def freelancer_parser_run(self):
         recent = self.get_recent_projects()
         if recent:
-            print(f'\nНайдено {len(recent)} новых проектов за последние 5 минут:')
             for project in recent:
                 project_id = project.get('id')
                 if not project_id:
@@ -104,12 +103,8 @@ class FreelancerParser:
                     'budget': budget
                 }
 
-                print(message)
                 self.publish_to_redis(message, channel='freelancer_projects')
-                print(f'Опубликован проект {project_id}: {title}')
                 self.redis_client.set(redis_key, '1', ex=360)
-        else:
-            print('\nНовых проектов за последние 5 минут не найдено.')
 
     def run(self):
         while True:
