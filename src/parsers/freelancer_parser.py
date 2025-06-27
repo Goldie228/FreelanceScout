@@ -1,5 +1,6 @@
 import os
 import time
+import threading
 import json
 import redis
 from dotenv import load_dotenv
@@ -15,6 +16,7 @@ class FreelancerParser:
 
     def __init__(self, redis_client):
         self.redis_client = redis_client
+        self.update_event = threading.Event()
 
         load_dotenv()
         FreelancerParser.URL = os.getenv('FLN_URL')
@@ -23,6 +25,13 @@ class FreelancerParser:
         self.oauth_token = os.getenv('FLN_OAUTH_TOKEN')
         if not self.oauth_token:
             raise ValueError("FLN_OAUTH_TOKEN не задана в переменных окружения!")
+
+        listener = threading.Thread(
+            target=self._listen_for_updates,
+            name="RedisListener",
+            daemon=True
+        )
+        listener.start()
 
         self.run()
 
@@ -106,11 +115,21 @@ class FreelancerParser:
                 self.publish_to_redis(message, channel='freelancer_projects')
                 self.redis_client.set(redis_key, '1', ex=360)
 
+    def _listen_for_updates(self):
+        pubsub = self.redis_client.pubsub()
+        pubsub.subscribe('data_updates')
+        for message in pubsub.listen():
+            if message['type'] == 'message':
+                print('Получено сообщение data_updates (Freelancer)— сбрасываем таймер обновления')
+                self.update_event.set()
+
     def run(self):
         while True:
+            triggered = self.update_event.wait(timeout=300)
+            if triggered:
+                self.update_event.clear()
+
             try:
                 self.freelancer_parser_run()
             except Exception as e:
                 print('Ошибка запроса:', e)
-
-            time.sleep(300)

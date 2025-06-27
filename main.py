@@ -68,12 +68,14 @@ async def command_start_handler(message: Message) -> None:
         "2. Укажите ключевые слова для фильтрации\n"
         "3. Выберите платформы, которые хотите отслеживать\n\n"
         "❓ Подробная инструкция доступна по команде /help",
-        reply_markup=keyboard,
+        reply_markup=get_main_keyboard(),
         parse_mode=ParseMode.HTML
     )
 
 @dp.message(Command("help"))
 async def help_command(message: Message):
+    is_admin = message.from_user.username and message.from_user.username.lower() == ADMIN_USERNAME.lower()
+    
     help_text = (
         "📚 <b>Справка по командам бота</b>\n\n"
         "👋 <b>/start</b> - Начало работы с ботом\n"
@@ -89,13 +91,21 @@ async def help_command(message: Message):
         "• Используйте несколько ключевых слов\n"
         "• Регулярно обновляйте ключевые слова в настройках\n"
         "• Отключайте платформы, которые вам неинтересны\n\n"
-        "❓ Если у вас остались вопросы, обратитесь к администратору: @Goldie228."
     )
+    
+    if is_admin:
+        help_text += (
+            "👑 <b>Команды администратора:</b>\n"
+            "• <b>/force_update</b> - Экстренная проверка новых заказов\n"
+            "• <b>/shutdown</b> - Остановка бота\n\n"
+        )
+    
+    help_text += "❓ Если у вас остались вопросы, обратитесь к администратору: @Goldie228."
     
     await message.answer(
         help_text,
         parse_mode=ParseMode.HTML,
-        reply_markup=ReplyKeyboardRemove()
+        reply_markup=get_main_keyboard()
     )
 
 @dp.message(lambda message: message.text == "⚙️ Настройки")
@@ -143,6 +153,15 @@ async def shutdown_command(message: Message):
 
 class SettingsState(StatesGroup):
     SETTING_KEYWORDS = State()
+
+def get_main_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="⚙️ Настройки")],
+            [KeyboardButton(text="❓ Помощь")]
+        ],
+        resize_keyboard=True
+    )
 
 async def cmd_settings(message: Message, update: bool = False):
     chat_id = str(message.chat.id)
@@ -254,10 +273,18 @@ async def set_keywords_start(callback: CallbackQuery, state: FSMContext):
 @dp.message(Command("cancel"), SettingsState.SETTING_KEYWORDS)
 async def cancel_keywords(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("❌ Настройка ключевых слов отменена")
+    await message.answer(
+        "❌ Настройка ключевых слов отменена",
+        reply_markup=get_main_keyboard()
+    )
 
-    await cmd_settings(message, update=False)
-
+@dp.message(Command("force_update"))
+async def force_update_command(message: Message):
+    if message.from_user.username and message.from_user.username.lower() == ADMIN_USERNAME.lower():
+        redis_client.publish('data_updates', 'true')
+        await message.answer("🔄 Запуск экстренной проверки новых заказов...")
+    else:
+        await message.answer("⛔ Эта команда доступна только администратору")
 
 @dp.message(SettingsState.SETTING_KEYWORDS)
 async def save_keywords(message: Message, state: FSMContext):
@@ -279,8 +306,16 @@ async def save_keywords(message: Message, state: FSMContext):
         await message.answer("❌ Ошибка обновления ключевых слов в базе данных. Попробуйте позже.")
         return
 
-    await message.answer(f"✅ Ключевые слова сохранены:\n<code>{validated_keywords}</code>", parse_mode=ParseMode.HTML)
     await cmd_settings(message, update=False)
+
+    await message.answer(
+        f"✅ Ключевые слова сохранены:\n<code>{validated_keywords}</code>", 
+        parse_mode=ParseMode.HTML
+    )
+    await message.answer(
+        "Вы в главном меню",
+        reply_markup=get_main_keyboard()
+    )
 
 @dp.callback_query(lambda c: c.data == "close_settings")
 async def close_settings(callback: CallbackQuery):
@@ -288,7 +323,11 @@ async def close_settings(callback: CallbackQuery):
         await callback.message.delete()
     except Exception as e:
         logging.error(f"Ошибка удаления сообщения настроек: {e}")
-    await callback.answer("Настройки закрыты")
+    await callback.message.answer(
+        "⚙️ Настройки закрыты.",
+        reply_markup=get_main_keyboard()
+    )
+    await callback.answer()
 
 def handle_signal(signame):
     logging.info(f"Получен сигнал {signame}")

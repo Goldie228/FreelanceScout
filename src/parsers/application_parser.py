@@ -22,20 +22,17 @@ class ApplicationParser:
             
         self._is_running = True
         try:
-            # Создаем процессы
             self.processes = [
                 Process(target=self._run_parser, args=(FlParser, self.redis_client)),
                 Process(target=self._run_parser, args=(KworkParser, self.redis_client)),
                 Process(target=self._run_parser, args=(FreelancerParser, self.redis_client))
             ]
             
-            # Запускаем процессы
             for i, proc in enumerate(self.processes):
                 proc.start()
                 names = ["fl_parser", "kwork_parser", "freelancer_parser"]
                 print(f"Запущен процесс: {names[i]} (PID: {proc.pid})")
             
-            # Ждем завершения
             for proc in self.processes:
                 proc.join()
                 
